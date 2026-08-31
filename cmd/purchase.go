@@ -11,12 +11,19 @@ import (
 
 // nolint:wrapcheck
 func purchaseCmd() *cobra.Command {
-	var bundleID string
+	var (
+		appID    int64
+		bundleID string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "purchase",
 		Short: "Obtain a license for the app from the App Store",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if appID == 0 && bundleID == "" {
+				return errors.New("either the app ID or the bundle identifier must be specified")
+			}
+
 			var lastErr error
 			var acc appstore.Account
 
@@ -40,12 +47,14 @@ func purchaseCmd() *cobra.Command {
 					acc = loginResult.Account
 				}
 
-				lookupResult, err := dependencies.AppStore.Lookup(appstore.LookupInput{Account: acc, BundleID: bundleID})
+				app, err := resolvePurchaseApp(appID, bundleID, func() (appstore.LookupOutput, error) {
+					return dependencies.AppStore.Lookup(appstore.LookupInput{Account: acc, BundleID: bundleID})
+				})
 				if err != nil {
 					return err
 				}
 
-				err = dependencies.AppStore.Purchase(appstore.PurchaseInput{Account: acc, App: lookupResult.App})
+				err = dependencies.AppStore.Purchase(appstore.PurchaseInput{Account: acc, App: app})
 				if err != nil && !errors.Is(err, appstore.ErrLicenseAlreadyExists) {
 					return err
 				}
@@ -70,8 +79,22 @@ func purchaseCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&bundleID, "bundle-identifier", "b", "", "Bundle identifier of the target iOS app (required)")
-	_ = cmd.MarkFlagRequired("bundle-identifier")
+	cmd.Flags().Int64VarP(&appID, "app-id", "i", 0, "ID of the target app (required)")
+	cmd.Flags().StringVarP(&bundleID, "bundle-identifier", "b", "", "The bundle identifier of the target app (overrides the app ID)")
 
 	return cmd
+}
+
+func resolvePurchaseApp(appID int64, bundleID string, lookup func() (appstore.LookupOutput, error)) (appstore.App, error) {
+	app := appstore.App{ID: appID}
+	if bundleID == "" {
+		return app, nil
+	}
+
+	lookupResult, err := lookup()
+	if err != nil {
+		return appstore.App{}, err
+	}
+
+	return lookupResult.App, nil
 }
